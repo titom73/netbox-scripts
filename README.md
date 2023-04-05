@@ -1,6 +1,6 @@
 # A netbox script repository
 
-Some [Netbox script]() used in personnal or project environments
+Some [Netbox script](https://github.com/netbox-community/netbox) used in personnal or project environments
 
 
 ## List of scripts
