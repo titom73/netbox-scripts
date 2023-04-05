@@ -80,6 +80,7 @@ class IpScan(Script):
         nb_instance = pynetbox.api(url=NETBOX_URL, token=NETBOX_TOKEN)
         nb_instance.http_session.verify = False
         self.log_warning('connecting to netbox')
+
         # get all available subnets
         prefixes = nb_instance.ipam.prefixes.all()
         for prefix in prefixes:
@@ -88,6 +89,7 @@ class IpScan(Script):
                 is_scannable = True if str(tag).lower() == str(TAG_FOR_SCAN).lower() else is_scannable
             if is_scannable:
                 self.log_info(f'scanning prefix {prefix} since tag {TAG_FOR_SCAN} is configured')
+
                 # get VRF configured for the prefix
                 configured_vrf = str(prefix.vrf) if prefix.vrf is not None else ''
 
@@ -100,42 +102,41 @@ class IpScan(Script):
                 if scan.list_of_hosts_found == []:
                     self.log_warning(f'No host found in network {prefix}')
                 else:
-                    self.log_success(f'IPs found: {scan.list_of_hosts_found}')
+                    self.log_success(f'Found: {len(scan.list_of_hosts_found)} IPs')
+                    self.log_success(f'-> {scan.list_of_hosts_found}')
+
+                # Build a list of IP to update
+                # Concatenate live host and Netbox configured hosts
+                ips_to_check = scan.list_of_hosts_found + [address.address.split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(state='active', prefix=prefix)]
+                # self.log_info(f"Netbox has following addresses configured: {[address.address.split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(state='active', prefix=prefix)]}")
 
                 # Monitor IP address status from Network to Netbox
-                for address_scanned in scan.list_of_hosts_found:
+                for address_scanned in ips_to_check:
+                    # Build CIDR format as it is used by Netbox
                     address_scanned_cidr = f'{address_scanned}/{ipv4network.prefixlen}'
+                    # Get Netbox information for given IP Address
                     address_netbox_info = nb_instance.ipam.ip_addresses.get(address=address_scanned_cidr)
+                    # Execute reverse DNS check for IP address
+                    rdns = do_rdns(address_scanned)
+
                     # If IP already exist in Netbox
                     if address_netbox_info != None:
+                        # self.log_debug(f'got {address_netbox_info} to deal with')
                         state = 'reserved'
                         # If present in scan list, mark it as active.
-                        if str(address_netbox_info).rpartition('/')[0] in scan.list_of_hosts_found:
-                            self.log_info(f'Host {address_netbox_info} is responding. updating state to active')
+                        if str(address_netbox_info).split('/')[0] in scan.list_of_hosts_found:
                             state = 'active'
                         # If present in Netbox but not in scan result
                         # Mark it as deprecated
                         else:
                             self.log_warning(f'Host {address_netbox_info} is not responding. updating state to deprecated')
                             state = 'deprecated'
-                        nb_instance.ipam.ip_addresses.update([{'id':address_netbox_info.id, 'status':state, 'vrf': nb_instance.ipam.vrfs.get(q=configured_vrf).id},])
 
-                # Update or Create entry in Netbox with their hostname
-                for address_scanned in scan.list_of_hosts_found:
-                    address_scanned_cidr = f'{address_scanned}/{ipv4network.prefixlen}'
-                    address_netbox_info = nb_instance.ipam.ip_addresses.get(address=address_scanned_cidr)
-                    if address_netbox_info != None:
-                        rdns = do_rdns(address_scanned)
-                        if address_netbox_info.dns_name != rdns:
-                            self.log_info(f'Updating netbox entry for {address_scanned_cidr} (dns: {rdns})')
-                            nb_instance.ipam.ip_addresses.update([{'id':address_netbox_info.id, 'dns_name':rdns},])
+                        # Update IP address in Netbox
+                        nb_instance.ipam.ip_addresses.update([{'id':address_netbox_info.id, 'status':state, 'vrf': nb_instance.ipam.vrfs.get(q=configured_vrf).id, 'dns_name':rdns},])
+
+                    # For new IP detected in network
                     else:
-                        rdns = do_rdns(address_scanned_cidr)
-                        self.log_info(f'Adding {address_scanned_cidr} to netbox')
                         result = nb_instance.ipam.ip_addresses.create(address=address_scanned_cidr, status='active', dns_name=rdns)
-                        if result:
-                            result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
-                            result.save()
-                            self.log_info(f'netbox entry for {address_scanned_cidr} (dns:{rdns}) created')
-                        else:
-                            self.log_error(f'netbox entry for {address_scanned_cidr} (dns:{rdns}) Failed')
+                        result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
+                        result.save()
