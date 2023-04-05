@@ -18,6 +18,7 @@
 
 from typing import Any
 import pynetbox, urllib3, networkscan, socket, ipaddress
+import ipaddress
 from extras.scripts import Script
 
 """
@@ -92,6 +93,7 @@ class IpScan(Script):
 
                 # get VRF configured for the prefix
                 configured_vrf = str(prefix.vrf) if prefix.vrf is not None else ''
+                configured_tenant = str(prefix.tenant)
 
                 ipv4network = ipaddress.IPv4Network(prefix)
                 scan = networkscan.Networkscan(prefix)
@@ -102,22 +104,35 @@ class IpScan(Script):
                 if scan.list_of_hosts_found == []:
                     self.log_warning(f'No host found in network {prefix}')
                 else:
-                    self.log_success(f'Found: {len(scan.list_of_hosts_found)} IPs in {prefix}')
-                    self.log_success(f'-> {scan.list_of_hosts_found}')
+                    self.log_info(f'Found: {len(scan.list_of_hosts_found)} IPs in {prefix}')
+                    self.log_info(f'-> {scan.list_of_hosts_found}')
 
                 # Build a list of IP to update
                 # Concatenate live host and Netbox configured hosts
-                netbox_addresses = [str(address).split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(parent=prefix)]
-                ips_to_check = scan.list_of_hosts_found + netbox_addresses
+                netbox_addresses = [
+                    str(nb_address).split('/')[0] for nb_address in nb_instance.ipam.ip_addresses.all()
+                    if ipaddress.ip_address(str(nb_address).split('/')[0]) in ipaddress.ip_network(prefix)
+                ]
+                # netbox_addresses = [str(address).split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(parent=prefix)]
+                ips_to_check = list(set(scan.list_of_hosts_found + netbox_addresses))
+                self.log_info(f'Need to work on: {len(ips_to_check)} IPs in {prefix}')
+                self.log_info(f'-> {ips_to_check}')
+
 
                 # Monitor IP address status from Network to Netbox
                 for address_scanned in ips_to_check:
                     # Build CIDR format as it is used by Netbox
                     address_scanned_cidr = f'{address_scanned}/{ipv4network.prefixlen}'
                     # Get Netbox information for given IP Address
-                    address_netbox_info = nb_instance.ipam.ip_addresses.get(address=address_scanned_cidr)
+                    address_netbox_info = nb_instance.ipam.ip_addresses.get(
+                        address=address_scanned_cidr,
+                        # vrf=nb_instance.ipam.vrfs.get(q=configured_vrf)
+                    )
                     # Execute reverse DNS check for IP address
                     rdns = do_rdns(address_scanned)
+
+                    if address_scanned == '10.73.0.4':
+                        self.log_debug(f'Netbox info for host {address_scanned} is {address_netbox_info}')
 
                     # If IP already exist in Netbox
                     if address_netbox_info != None:
@@ -133,10 +148,20 @@ class IpScan(Script):
                             state = 'deprecated'
 
                         # Update IP address in Netbox
-                        nb_instance.ipam.ip_addresses.update([{'id':address_netbox_info.id, 'status':state, 'vrf': nb_instance.ipam.vrfs.get(q=configured_vrf).id, 'dns_name':rdns},])
+                        nb_instance.ipam.ip_addresses.update(
+                            [
+                                {'id':address_netbox_info.id,
+                                 'status':state,
+                                 'vrf': nb_instance.ipam.vrfs.get(q=configured_vrf).id,
+                                 'dns_name':rdns,
+                                 'tenant': nb_instance.tenancy.tenants.get(q=configured_tenant).id,
+                                },
+                            ]
+                        )
 
                     # For new IP detected in network
                     else:
-                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned_cidr, status='active', dns_name=rdns)
+                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned, status='active')
                         result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
+                        result.tentant = nb_instance.tenancy.tenants.get(q=configured_tenant).id
                         result.save()
