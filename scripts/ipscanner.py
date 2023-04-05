@@ -50,7 +50,7 @@ Unsupported features
 # Netbox URL to use
 NETBOX_URL = 'http://netbox.as73.inetsix.net'
 # Netbox Token to authenticate against NETBOX_URL
-NETBOX_TOKEN = ''
+NETBOX_TOKEN = 'd02bc3922f88f28e48fc66e9a3b3c8e3eab7a79a'
 # Tag configured on prefixes to scan
 TAG_FOR_SCAN = 'ipscan'
 
@@ -102,13 +102,13 @@ class IpScan(Script):
                 if scan.list_of_hosts_found == []:
                     self.log_warning(f'No host found in network {prefix}')
                 else:
-                    self.log_success(f'Found: {len(scan.list_of_hosts_found)} IPs')
+                    self.log_success(f'Found: {len(scan.list_of_hosts_found)} IPs in {prefix}')
                     self.log_success(f'-> {scan.list_of_hosts_found}')
 
                 # Build a list of IP to update
                 # Concatenate live host and Netbox configured hosts
-                ips_to_check = scan.list_of_hosts_found + [address.address.split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(state='active', prefix=prefix)]
-                # self.log_info(f"Netbox has following addresses configured: {[address.address.split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(state='active', prefix=prefix)]}")
+                netbox_addresses = [str(address).split('/')[0] for address in nb_instance.ipam.ip_addresses.filter(parent=prefix)]
+                ips_to_check = scan.list_of_hosts_found + netbox_addresses
 
                 # Monitor IP address status from Network to Netbox
                 for address_scanned in ips_to_check:
