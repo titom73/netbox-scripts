@@ -161,7 +161,13 @@ class IpScan(Script):
 
                     # For new IP detected in network
                     else:
-                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned, status='active')
+                        self.log_debug(f'Creating entry for address {address_scanned_cidr} in netbox')
+                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned_cidr, status='active')
+                        # self.log_debug('    * created')
                         result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
+                        # self.log_debug('    * VRF Updated')
                         result.tentant = nb_instance.tenancy.tenants.get(q=configured_tenant).id
+                        # self.log_debug('    * tenant configured')
+                        result.dns_name = rdns
+                        # self.log_debug('    * rdns done')
                         result.save()
