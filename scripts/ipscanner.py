@@ -94,6 +94,7 @@ class IpScan(Script):
                 # get VRF configured for the prefix
                 configured_vrf = str(prefix.vrf) if prefix.vrf is not None else ''
                 configured_tenant = str(prefix.tenant)
+                self.log_info(f'Network is configured in vrf {configured_vrf} for tenant {configured_tenant}')
 
                 ipv4network = ipaddress.IPv4Network(prefix)
                 scan = networkscan.Networkscan(prefix)
@@ -117,6 +118,7 @@ class IpScan(Script):
                 ips_to_check = list(set(scan.list_of_hosts_found + netbox_addresses))
                 self.log_info(f'Need to work on: {len(ips_to_check)} IPs in {prefix}')
                 self.log_info(f'-> {ips_to_check}')
+                self.log_info(f'Netmask to use: {ipv4network.prefixlen}')
 
 
                 # Monitor IP address status from Network to Netbox
@@ -131,8 +133,17 @@ class IpScan(Script):
                     # Execute reverse DNS check for IP address
                     rdns = do_rdns(address_scanned)
 
-                    if address_scanned == '10.73.0.4':
-                        self.log_debug(f'Netbox info for host {address_scanned} is {address_netbox_info}')
+                    self.log_debug(f'Netbox info for host {address_scanned} is {address_netbox_info}')
+
+                    if  address_netbox_info is None:
+                        self.log_debug(f'Creating entry for address {address_scanned_cidr} in netbox in tenant {configured_tenant}')
+                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned_cidr, status='active')
+                        result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
+                        result.save()
+                        address_netbox_info = nb_instance.ipam.ip_addresses.get(
+                            address=address_scanned_cidr,
+                            # vrf=nb_instance.ipam.vrfs.get(q=configured_vrf)
+                        )
 
                     # If IP already exist in Netbox
                     if address_netbox_info != None:
@@ -158,16 +169,6 @@ class IpScan(Script):
                                 },
                             ]
                         )
-
-                    # For new IP detected in network
                     else:
-                        self.log_debug(f'Creating entry for address {address_scanned_cidr} in netbox')
-                        result = nb_instance.ipam.ip_addresses.create(address=address_scanned_cidr, status='active')
-                        # self.log_debug('    * created')
-                        result.vrf = nb_instance.ipam.vrfs.get(q=configured_vrf).id
-                        # self.log_debug('    * VRF Updated')
-                        result.tentant = nb_instance.tenancy.tenants.get(q=configured_tenant).id
-                        # self.log_debug('    * tenant configured')
-                        result.dns_name = rdns
-                        # self.log_debug('    * rdns done')
-                        result.save()
+                        self.log_warning(f'skipping {address_netbox_info}')
+
